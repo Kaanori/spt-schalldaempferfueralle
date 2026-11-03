@@ -1,6 +1,7 @@
 # SchalldaempferFuerAlle (suppressors for all)
 
-Adjusts the values of **all** suppressors at once – including those that other mods (WTT-Armory & co.) only add to the database later. For every value you choose **how** it is changed: not at all, set to a fixed number, added to, or by percent.
+Applies the six suppressor values to **every** suppressor, including those
+that other mods only add to the database later.
 
 ## How this mod was made (AI disclosure)
 
@@ -13,11 +14,11 @@ bug, please open an [issue](https://github.com/Kaanori/spt-schalldaempferfuerall
 ## Requirements
 
 - SPT 4.1.6 (server).
-- Replaces BetterSuppressors (no longer needed). Covers WTT-Armory and other mods' suppressors too.
+- Optional: BetterSuppressors (its `config.json` is used if present). Made for WTT-Armory, whose suppressors BetterSuppressors misses.
 
 ## Installation
 
-1. Download `SchalldaempferFuerAlle-1.1.0.zip` from the [Releases](https://github.com/Kaanori/spt-schalldaempferfueralle/releases) page.
+1. Download `SchalldaempferFuerAlle-1.0.0.zip` from the [Releases](https://github.com/Kaanori/spt-schalldaempferfueralle/releases) page.
 2. Extract it **into your SPT game folder** (the folder that contains `EscapeFromTarkov.exe`).
    The ZIP already has the right layout; the mod ends up in `SPT_Runtime/user/mods/SchalldaempferFuerAlle/`.
    On Windows, make sure "Extract All" does not add an extra subfolder.
@@ -29,50 +30,71 @@ Delete the mod's files from `SPT_Runtime/user/mods/SchalldaempferFuerAlle/` (set
 
 ## Why this is needed
 
-**BetterSuppressors** only catches part of them – measured on 2026-09-20: **76 of 112** suppressors; the missing ones come from **WTT-Armory**, which loads later. It can also only set fixed values. Since 1.1.0 this mod does everything itself; **BetterSuppressors is no longer needed** (if it is still installed, its numbers are taken back).
+**BetterSuppressors** only catches part of them. Measured on 2026-09-20:
+**76 of 112** suppressors. The missing 36 come from **WTT-Armory**.
 
-## Settings: `config.json` next to the DLL
+The reason is load order: BetterSuppressors works in `IOnLoad` and is number
+**30** in the sequence, while WTT-Armory only comes as number **34**. When
+BetterSuppressors runs, the WTT suppressors simply do not exist yet.
 
-    SPT_Runtime/user/mods/SchalldaempferFuerAlle/config.json
+The server has no later entry point; only `IOnLoad` and `IOnDIConstruct`
+exist (checked in `SPTarkov.Server.Core.dll`).
 
-The file is created on the first server start and contains a short guide in English and German. One block per value:
+## How it is solved
 
-    "Recoil": { "Modus": "Prozent", "Zahl": 50, "Min": -50, "Max": 50 }
+Two passes:
 
-| Mode (`Modus`) | Result |
-|---|---|
-| `aus` / `off` | original value |
-| `Wert` / `set` | `Zahl` as a fixed value |
-| `Plus` / `add` | original + `Zahl` |
-| `Prozent` / `percent` | original × (1 + `Zahl`/100) |
+1. **On server start** (`IOnLoad`): catches everything that exists at that point.
+2. **Once, on the first client request** (`IHttpListener`): by then **all**
+   mods are guaranteed to have finished loading.
 
-`Min`/`Max` limit the result. Percent keeps the sign: ergonomics −20 with −50 % gives −10 (better); recoil −6 with +50 % gives −9 (better).
-`Ausnahmen` (exceptions): template IDs that keep their original values. `NurDiese` (only these): if not empty, **only** these IDs are changed.
-Restart the server after editing.
+The second pass is independent of load order. It reports in the log how many
+suppressors were only added afterwards.
 
-**Original** = the value a suppressor would have without this mod, including other mods' changes (e.g. SVM halving weight). Plus/percent are always calculated from that original, never twice.
+`CanHandle` **always returns `false`**, so the mod never answers a request
+itself; it only uses the call as a point in time. The counter uses
+`Interlocked` because the server may check several requests at the same time.
 
-| Value | better is | base game | effect in game |
-|---|---|---|---|
-| `Ergonomics` | higher | −30 … −2 | sum over all attachments |
-| `Recoil` | lower | −15 … −1 % | sum, never below −100 |
-| `Accuracy` | higher | −5 … +1 % | sum, whole number in the client |
-| `Velocity` | higher | 0.2 … 1.2 % | muzzle velocity |
-| `Loudness` | lower | −39 … 0 | only with SAIN: bots' hearing range |
-| `DurabilityBurn` | lower | 1.2 … 2.15 | factor, wear per shot |
-| `HeatFactor` | lower | 1.05 … 1.34 | factor, heat per shot |
-| `CoolFactor` | **higher** | 1.0 … 1.2 | factor, cooling (below 1 = slower!) |
-| `Weight` | lower | 0.13 … 1.1 kg | weight |
+## Settings
 
-The exact ranges of all suppressors (191 with WTT-Armory) are written to the server log after every start (`Original … -> now …`).
+It stays at **one** file:
 
-## Upgrading from 1.0.0
+    SPT_Runtime/user/mods/BetterSuppressors/config.json
 
-Without a `config.json` the mod reads BetterSuppressors' `config.json` (if present), then `schalldaempfer.json`, then built-in defaults (Ergonomics 0, DurabilityBurn 1.0, HeatFactor 0.90, CoolFactor 0.92, Accuracy 6, Velocity 6 – mode `set`; Recoil, Loudness, Weight `off`) and creates `config.json` **once** from that – the numbers stay exactly the same as in 1.0.0. A broken `config.json` is reported loudly in the log and never overwritten.
+This mod reads it as well. If it is missing, `schalldaempfer.json` next to
+the mod's own DLL is used, otherwise the built-in defaults.
 
-## How it works
+| Key | Default | Original in the game |
+|---|---|---|
+| `Ergonomics` | 0 | −30 to −2 (mostly −21) |
+| `DurabilityBurn` | 1.0 | 1.2 to 2.15 (mostly 1.75) |
+| `HeatFactor` | 0.90 | 1.05 to 1.34 (mostly 1.14) |
+| `CoolFactor` | 0.92 | 1.0 to 1.2 (mostly 1.0) |
+| `Accuracy` | 6 | −5 to +1 (mostly 0) |
+| `Velocity` | 6 | 0.2 to 1.2 (mostly 0.7) |
 
-`IOnLoad` passes: **999** save all suppressor values · **1001** take back BetterSuppressors' fixed numbers (WTT creates many suppressors as copies of base-game ones) · **last** apply the settings · **first client request** once more for anything added even later.
+The values are set **absolutely**, not added on top, so afterwards every
+suppressor has the same numbers.
+
+Unlike BetterSuppressors, this mod reports an unreadable settings file
+**loudly in the log** instead of silently falling back to defaults.
+
+## Can BetterSuppressors go?
+
+Yes. This mod does the same job and more. If you remove BetterSuppressors,
+take its `config.json` with you first and place it as
+`schalldaempfer.json` next to this DLL.
+
+## Test status
+
+Builds with 0 errors, 0 warnings. Whether all 112 are really set is shown
+after server start by the log line "Nachgezogen: …" ("caught up"), and by the
+cross-check on the running server:
+
+    curl -sk -H "Cookie: PHPSESSID=<profile ID>" https://127.0.0.1:6969/client/items
+
+(The response is zlib-compressed; suppressors are the templates with
+`_parent` = `550aa4cd4bdc2dd8348b456c`.)
 
 ## Building from source
 
